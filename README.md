@@ -13,6 +13,19 @@ V12 GDI ready real-time ECU stack
 * 2 CJ125 lambda controllers
 * STM32G4 cpu for automatic injector drive with analog comparators and DACs
 * 186 pin standard ECU connector
+* 12 general purpose output (push, pull selectable)
 
 All the features of the projects can be used standalone for the most basic applications.
 However the board is designed to be shielded to the raspberry breakout board to enable complex and high precision engine controls.
+
+# Component selection
+
+* STM32G474VETx for CPU
+* TO-252-2 mosfet for injection driver
+* IR2101 gate driver for high sides
+* TC4427 gate driver for low sides
+* ACS722 for injectors current sensing
+* RGPR30BM40 for ignition IGBT
+* IFX007TAUMA1 for push/pull GPO
+* ADCMP354 comparator for trigger edge detection (compatible up to 22V)
+* CJ125 for lambda control
