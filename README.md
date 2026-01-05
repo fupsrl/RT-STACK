@@ -1,5 +1,14 @@
 # RT-STACK
 V12 GDI ready real-time ECU stack
+The ultimate Engine Control Unit (ECU) platform capable of taming any Internal Combustion Engine (ICE) out there.
+
+The core philosophy driving this development is:
+**Keep it Simple:** Easy to pick up if you just want it to run, deep enough if you want to tinker.
+**Universal:** Adapt the software architecture to your needs and control virtually anything: 2-stroke, 4-stroke, Wankel, Diesel... you name it.
+**Unlimited Power:** By leveraging a Raspberry Pi for high-level control, you can say goodbye to RAM and CPU bottlenecks. Plus, with Simulink support, you can use graphical programming and run your engine without writing a single line of code.
+**Pro-Grade:** Don't let the simplicity fool you. The design requirements are built to handle complex beasts, from turbocharged setups to high-revving naturally aspirated V12s.
+
+_Disclaimer: The board is not intended to be used on road legal vehicles and it is provided wihtout any warranty._
 
 <img width="1724" height="1058" alt="RT_STACK_front" src="https://github.com/user-attachments/assets/7c1804ee-9972-4c92-b98b-580d52981549" />
 <img width="1724" height="1058" alt="RT_STACK_back" src="https://github.com/user-attachments/assets/91e5549d-2c8a-48a6-b664-45340de67f9b" />
