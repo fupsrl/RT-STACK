@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "iota")(type "KiCad")(uri "C:/Users/alber/Desktop/IOTA/LIBS/iota.pretty")(options "")(descr ""))
+)
