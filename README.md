@@ -6,6 +6,7 @@ The core philosophy driving this development is:
 * **Universal:** Adapt the software architecture to your needs and control virtually anything: 2-stroke, 4-stroke, Wankel, Diesel... you name it.
 * **Unlimited Power:** By leveraging a Raspberry Pi for high-level control, you can say goodbye to RAM and CPU bottlenecks. Plus, with Simulink support, you can use graphical programming and run your engine without writing a single line of code.
 * **Pro-Grade:** Don't let the simplicity fool you. The design requirements are built to handle complex beasts, from turbocharged setups to high-revving naturally aspirated V12s.
+* **Platforms independent:** Measurement and Calibration with XCP protocol (a2l + hex). Can be used with OEM softwares like INCA/CANAPE (free version available) or with any other software like Vehicle Spy, Open vector XCP stack, ...
 
 _Disclaimer: The board is not intended to be used on road legal vehicles and it is provided wihtout any warranty._
 
