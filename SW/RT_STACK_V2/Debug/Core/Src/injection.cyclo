@@ -1,0 +1,10 @@
+../Core/Inc/engine_config.h:111:22:cyl_index	3
+../Core/Inc/engine_runtime.h:24:24:cycle_now	1
+../Core/Inc/engine_runtime.h:36:21:wrap720	3
+../Core/Inc/engine_runtime.h:45:20:angle_crossed	7
+../Core/Src/injection.c:31:13:inj_off_channel	1
+../Core/Src/injection.c:42:13:inject_channel	8
+../Core/Src/injection.c:83:13:injection_run	3
+../Core/Src/injection.c:96:6:injection_update	2
+../Core/Src/injection.c:108:6:injection_off	4
+../Core/Src/injection.c:123:6:injection_init	5

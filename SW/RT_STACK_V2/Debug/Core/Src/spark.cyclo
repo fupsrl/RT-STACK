@@ -1,0 +1,8 @@
+../Core/Inc/engine_config.h:111:22:cyl_index	3
+../Core/Inc/engine_runtime.h:36:21:wrap720	3
+../Core/Inc/engine_runtime.h:45:20:angle_crossed	7
+../Core/Src/spark.c:24:13:coil_write	1
+../Core/Src/spark.c:31:13:spark_run	8
+../Core/Src/spark.c:72:6:spark_update	3
+../Core/Src/spark.c:87:6:spark_off	4
+../Core/Src/spark.c:103:6:spark_init	3

@@ -1,0 +1,9 @@
+../Core/Src/trigger_decoder.c:23:14:wrapf	3
+../Core/Src/trigger_decoder.c:33:13:channel_snapshot	2
+../Core/Src/trigger_decoder.c:61:14:crank_advance	2
+../Core/Src/trigger_decoder.c:80:13:crank_update	12
+../Core/Src/trigger_decoder.c:144:13:cam_update	14
+../Core/Src/trigger_decoder.c:191:14:cam_output	4
+../Core/Src/trigger_decoder.c:215:13:fusion_update	12
+../Core/Src/trigger_decoder.c:246:6:trigger_decoder_init	3
+../Core/Src/trigger_decoder.c:275:6:trigger_decoder_update	4

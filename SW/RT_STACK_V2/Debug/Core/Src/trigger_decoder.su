@@ -1,0 +1,9 @@
+../Core/Src/trigger_decoder.c:23:14:wrapf	16	static
+../Core/Src/trigger_decoder.c:33:13:channel_snapshot	32	static
+../Core/Src/trigger_decoder.c:61:14:crank_advance	40	static
+../Core/Src/trigger_decoder.c:80:13:crank_update	56	static
+../Core/Src/trigger_decoder.c:144:13:cam_update	64	static
+../Core/Src/trigger_decoder.c:191:14:cam_output	24	static
+../Core/Src/trigger_decoder.c:215:13:fusion_update	32	static
+../Core/Src/trigger_decoder.c:246:6:trigger_decoder_init	16	static
+../Core/Src/trigger_decoder.c:275:6:trigger_decoder_update	40	static
