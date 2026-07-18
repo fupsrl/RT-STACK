@@ -1,0 +1,2 @@
+../Core/Src/board_safety_stm32.c:6:13:preload_low_output	40	static
+../Core/Src/board_safety_stm32.c:31:6:board_force_actuator_pins_low_early	32	static,ignoring_inline_asm

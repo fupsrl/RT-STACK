@@ -38,17 +38,42 @@ BU_: RT_STACK RECEIVER
 
 BO_ 256 RT_Status: 8 RT_STACK
  SG_ EngineAngle : 0|16@1+ (0.1,0) [0|720] "deg" RECEIVER
- SG_ McuTemp : 16|8@1- (1,0) [-40|150] "degC" RECEIVER
+ SG_ McuTemp : 16|8@1- (1,0) [-40|127] "degC" RECEIVER
  SG_ Vbat : 32|16@1+ (1,0) [0|4095] "count" RECEIVER
  SG_ Vbus : 48|16@1+ (1,0) [0|4095] "count" RECEIVER
 
 
-CM_ BO_ 256 "Telemetria base RT_STACK: angolo motore, temperatura MCU, tensioni raw";
+BO_ 257 Engine_Status: 8 RT_STACK
+ SG_ EngineRPM : 0|16@1+ (1,0) [0|65535] "rpm" RECEIVER
+ SG_ EngineMode : 16|8@1+ (1,0) [0|4] "" RECEIVER
+ SG_ SyncOutputFlags : 24|8@1+ (1,0) [0|255] "" RECEIVER
+ SG_ SyncEpoch : 32|16@1+ (1,0) [0|65535] "" RECEIVER
+ SG_ VDDA : 48|16@1+ (1,0) [0|65535] "mV" RECEIVER
+
+BO_ 258 Fault_Status: 8 RT_STACK
+ SG_ EngineFaults : 0|8@1+ (1,0) [0|255] "" RECEIVER
+ SG_ TriggerFaults : 8|16@1+ (1,0) [0|65535] "" RECEIVER
+ SG_ IgnitionFaults : 24|8@1+ (1,0) [0|255] "" RECEIVER
+ SG_ InjectionFaults : 32|16@1+ (1,0) [0|65535] "" RECEIVER
+ SG_ CaptureLosses : 48|8@1+ (1,0) [0|255] "event" RECEIVER
+ SG_ CanTxDrops : 56|8@1+ (1,0) [0|255] "frame" RECEIVER
+
+
+CM_ BO_ 256 "Backward-compatible base telemetry: angle, MCU temperature, and raw external supply channels";
 CM_ SG_ 256 EngineAngle "Angolo motore 0..720 gradi, risoluzione 0.1 deg";
 CM_ SG_ 256 McuTemp "Temperatura die MCU dal sensore interno";
-CM_ SG_ 256 Vbat "Lettura ADC raw canale VBAT (12 bit)";
+CM_ SG_ 256 Vbat "External VBATT input on PB2/ADC2_IN12 (raw 12-bit count)";
 CM_ SG_ 256 Vbus "Lettura ADC raw canale VBUS (12 bit)";
+CM_ BO_ 257 "Engine state, synchronization flags, epoch, and measured analog reference";
+CM_ SG_ 257 SyncOutputFlags "bit0 crank sync, bit1 phase sync, bit2 outputs requested, bit3 outputs enabled";
+CM_ BO_ 258 "Latched engine/trigger/actuator faults and saturated acquisition/CAN loss counters";
+CM_ SG_ 258 InjectionFaults "Bit mask; bit9 (0x0200) is DEBUG_INTERLOCK, latched when a trigger edge aborts a stationary injector test";
+
+VAL_ 257 EngineMode 0 "DISABLED" 1 "SYNCING" 2 "RUNNING" 3 "FAULT" 4 "INJECTOR_TEST" ;
+VAL_ 258 InjectionFaults 0 "NONE" 1 "CONFIGURATION" 2 "BAD_COMMAND" 4 "BAD_RUNTIME" 8 "ANGLE_JUMP" 16 "PAIR_BUSY" 32 "HARDWARE" 64 "MISSED_EVENT" 128 "EMERGENCY" 256 "PAIR_COLLISION" 512 "DEBUG_INTERLOCK" ;
 
 BA_DEF_ BO_ "GenMsgCycleTime" INT 0 10000;
 BA_DEF_DEF_ "GenMsgCycleTime" 10;
 BA_ "GenMsgCycleTime" BO_ 256 10;
+BA_ "GenMsgCycleTime" BO_ 257 10;
+BA_ "GenMsgCycleTime" BO_ 258 10;

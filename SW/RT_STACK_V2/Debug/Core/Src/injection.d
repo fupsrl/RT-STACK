@@ -1,6 +1,7 @@
 Core/Src/injection.o: ../Core/Src/injection.c ../Core/Inc/injection.h \
- ../Core/Inc/engine_config.h ../Core/Inc/main.h \
- ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h \
+ ../Core/Inc/actuator_runtime.h ../Core/Inc/engine_config.h \
+ ../Core/Src/injection_internal.h ../Core/Inc/board_output_config.h \
+ ../Core/Inc/main.h ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h \
  ../Core/Inc/stm32g4xx_hal_conf.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_rcc.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_def.h \
@@ -37,9 +38,12 @@ Core/Src/injection.o: ../Core/Src/injection.c ../Core/Inc/injection.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim_ex.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h \
- ../Core/Inc/engine_runtime.h
+ ../Core/Inc/engine_config.h
 ../Core/Inc/injection.h:
+../Core/Inc/actuator_runtime.h:
 ../Core/Inc/engine_config.h:
+../Core/Src/injection_internal.h:
+../Core/Inc/board_output_config.h:
 ../Core/Inc/main.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h:
 ../Core/Inc/stm32g4xx_hal_conf.h:
@@ -78,4 +82,4 @@ Core/Src/injection.o: ../Core/Src/injection.c ../Core/Inc/injection.h \
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_tim_ex.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h:
-../Core/Inc/engine_runtime.h:
+../Core/Inc/engine_config.h:

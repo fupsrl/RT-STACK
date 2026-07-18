@@ -1,0 +1,5 @@
+../Core/Src/trigger_recorder.c:13:6:trigger_recorder_init	2
+../Core/Src/trigger_recorder.c:21:6:trigger_recorder_record_isr	5
+../Core/Src/trigger_recorder.c:56:6:trigger_recorder_pop_oldest	8
+../Core/Src/trigger_recorder.c:103:10:trigger_recorder_dropped	4
+../Core/Src/trigger_recorder.c:116:10:trigger_recorder_pending	3

@@ -1,0 +1,14 @@
+../Drivers/CMSIS/Include/core_cm4.h:1770:22:__NVIC_ClearPendingIRQ	2
+../Core/Src/trigger_capture_stm32.c:39:13:capture_is_started	1
+../Core/Src/trigger_capture_stm32.c:44:13:capture_publish_started	1
+../Core/Src/trigger_capture_stm32.c:49:10:trigger_capture_timestamp_hz	2
+../Core/Src/trigger_capture_stm32.c:61:17:gpio_mode_for_edge	3
+../Core/Src/trigger_capture_stm32.c:74:23:sampled_edge	3
+../Core/Src/trigger_capture_stm32.c:87:13:build_channel_map	14
+../Core/Src/trigger_capture_stm32.c:121:13:configure_trigger_gpio	5
+../Core/Src/trigger_capture_stm32.c:165:13:configure_tim2	6
+../Core/Src/trigger_capture_stm32.c:213:6:trigger_capture_stm32_init	7
+../Core/Src/trigger_capture_stm32.c:269:10:trigger_capture_now	1
+../Core/Src/trigger_capture_stm32.c:274:6:trigger_capture_stm32_timer_irq	7
+../Core/Src/trigger_capture_stm32.c:313:6:trigger_capture_stm32_stop	1
+../Core/Src/trigger_capture_stm32.c:325:6:HAL_GPIO_EXTI_Callback	6
