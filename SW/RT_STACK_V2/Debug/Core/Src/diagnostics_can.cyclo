@@ -1,0 +1,7 @@
+../Core/Src/diagnostics_can.c:16:17:clamp_u16	4
+../Core/Src/diagnostics_can.c:29:16:saturate_u8	2
+../Core/Src/diagnostics_can.c:34:15:saturate_i8	3
+../Core/Src/diagnostics_can.c:47:26:send_frame	6
+../Core/Src/diagnostics_can.c:82:19:diagnostics_can_init	2
+../Core/Src/diagnostics_can.c:99:6:diagnostics_can_service	9
+../Core/Src/diagnostics_can.c:158:10:diagnostics_can_tx_drops	1

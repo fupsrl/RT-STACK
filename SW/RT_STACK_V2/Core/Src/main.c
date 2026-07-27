@@ -7,10 +7,13 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
-#include "trigger_decoder.h"
-#include "engine_runtime.h"
-#include "spark.h"
-#include "injection.h"
+#include "board_config.h"
+#include "board_safety_stm32.h"
+#include "diagnostics_can.h"
+#include "dcdc_platform_stm32.h"
+#include "engine_control.h"
+#include "engine_watchdog_stm32.h"
+#include "trigger_capture_stm32.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -27,10 +30,6 @@
 /* Measured analog reference voltage, in mV (ADC conversions) */
 #define VDDA_MV         3200U
 
-/* CAN IDs: must stay aligned with RT_STACK_V2.dbc */
-#define CAN_ID_RT_STATUS      0x100U
-#define CAN_TX_PERIOD_MS      10U
-
 enum
 {
   ADC1_IDX_COMP1 = 0U,
@@ -39,7 +38,7 @@ enum
   ADC1_IDX_VBUS  = 3U,
   ADC1_IDX_COMP6 = 4U,
   ADC1_IDX_TEMP  = 5U,
-  ADC1_IDX_VBAT  = 6U,
+  ADC1_IDX_VREF  = 6U,
   ADC1_IDX_COMP4 = 7U,
   ADC3_IDX_COMP5 = 0U,
 };
@@ -79,26 +78,7 @@ UART_HandleTypeDef huart5;
 /* USER CODE BEGIN PV */
 volatile uint16_t ADC_VAL_adc1[8];
 volatile uint16_t ADC_VAL_adc3[1];
-
-/* Crankshaft position (deg) and speed, updated in the main loop by the
- * trigger-wheel decoder (trigger_decoder.*). engine_angle is 0..720 once the
- * phase cam has locked the cycle, otherwise 0..360 (see tout.phase_known). */
-volatile float engine_angle = 0.0f;
-volatile float engine_rpm   = 0.0f;
-
-/* Absolute angle per channel: channel_angle[CRANK_CH] = crankshaft,
- * channel_angle[cam_ch] = position of each cam (indexed by TMG channel). */
-volatile float channel_angle[TMG_CH_COUNT] = {0};
-
-/* TMG timing state, updated in HAL_GPIO_EXTI_Callback on every edge.
- * Indexed by TMG number (1..9). Read by the decode logic:
- *  - tmg_last_edge_cyc[ch] : instant (DWT cycles) of the last edge
- *  - tmg_period_cyc[ch]    : cycles between the last two edges (the "edge-to-edge time")
- *  - tmg_edge_count[ch]    : number of edges seen (period valid once count >= 2)
- * Convert cycles to time with cycles_to_us(). */
-volatile uint32_t tmg_last_edge_cyc[TMG_CH_COUNT] = {0};
-volatile uint32_t tmg_period_cyc[TMG_CH_COUNT]    = {0};
-volatile uint32_t tmg_edge_count[TMG_CH_COUNT]    = {0};
+static uint16_t adc2_vbatt_raw;
 
 typedef struct
 {
@@ -110,6 +90,7 @@ typedef struct
   uint16_t comp6_raw;
   uint16_t vbus_raw;
   uint16_t temp_raw;
+  uint16_t vref_raw;
   uint16_t vbat_raw;
 } adc_snapshot_t;
 /* USER CODE END PV */
@@ -137,8 +118,6 @@ static void MX_COMP1_Init(void);
 static void MX_ADC3_Init(void);
 static void MX_ADC2_Init(void);
 /* USER CODE BEGIN PFP */
-HAL_StatusTypeDef can_send_status(float angle_deg, int32_t temp_c,
-                                  uint16_t vbat_raw, uint16_t vbus_raw);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -180,8 +159,27 @@ static void boot_from_flash_ob_init(void)
   Error_Handler();
 }
 
+static void injector_comparator_hysteresis_init(void)
+{
+  COMP_HandleTypeDef *const comparators[] = {
+    &hcomp1, &hcomp2, &hcomp3, &hcomp4, &hcomp5, &hcomp6,
+  };
+
+  for (uint32_t i = 0U; i < (sizeof(comparators) / sizeof(comparators[0])); ++i)
+  {
+    comparators[i]->Init.Hysteresis = BOARD_INJECTOR_COMPARATOR_HYSTERESIS;
+    MODIFY_REG(comparators[i]->Instance->CSR, COMP_CSR_HYST,
+               BOARD_INJECTOR_COMPARATOR_HYSTERESIS);
+  }
+}
+
 static adc_snapshot_t adc_snapshot_read(void)
 {
+  if (__HAL_ADC_GET_FLAG(&hadc2, ADC_FLAG_EOC) != 0U)
+  {
+    adc2_vbatt_raw = (uint16_t)HAL_ADC_GetValue(&hadc2);
+  }
+
   adc_snapshot_t adc = {
     .comp1_raw = ADC_VAL_adc1[ADC1_IDX_COMP1],
     .comp2_raw = ADC_VAL_adc1[ADC1_IDX_COMP2],
@@ -191,28 +189,13 @@ static adc_snapshot_t adc_snapshot_read(void)
     .comp6_raw = ADC_VAL_adc1[ADC1_IDX_COMP6],
     .vbus_raw  = ADC_VAL_adc1[ADC1_IDX_VBUS],
     .temp_raw  = ADC_VAL_adc1[ADC1_IDX_TEMP],
-    .vbat_raw  = ADC_VAL_adc1[ADC1_IDX_VBAT],
+    .vref_raw  = ADC_VAL_adc1[ADC1_IDX_VREF],
+    .vbat_raw  = adc2_vbatt_raw,
   };
 
   return adc;
 }
 
-static uint8_t tmg_channel_from_pin(uint16_t gpio_pin)
-{
-  switch (gpio_pin)
-  {
-    case TMG_OUT1_Pin: return 1U;  /* PD10 */
-    case TMG_OUT2_Pin: return 2U;  /* PD12 */
-    case TMG_OUT3_Pin: return 3U;  /* PC9  */
-    case TMG_OUT4_Pin: return 4U;  /* PD14 */
-    case TMG_OUT6_Pin: return 6U;  /* PD11 */
-    case TMG_OUT7_Pin: return 7U;  /* PD13 */
-    case TMG_OUT8_Pin: return 8U;  /* PD15 */
-    case TMG_OUT9_Pin: return 9U;  /* PA8  */
-    default:           return 0U;
-  }
-}
-/* cycle_now()/cycles_to_us() and the angle helpers live in engine_runtime.h. */
 /* USER CODE END 0 */
 
 /**
@@ -229,6 +212,9 @@ int main(void)
    * the application handlers. */
   SCB->VTOR = FLASH_BASE;
   __DSB();
+  /* The PCB has no external actuator pull-downs/global enable.  Reduce the
+   * high-impedance boot window before HAL, clocks, or option-byte work. */
+  board_force_actuator_pins_low_early();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -244,9 +230,6 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  /* Clock Security System: if the 20 MHz crystal stops, the hardware
-   * automatically switches the system clock to HSI16 (runs at reduced speed
-   * but does not hang) and raises an NMI. */
   HAL_RCC_EnableCSS();
   /* USER CODE END SysInit */
 
@@ -272,12 +255,23 @@ int main(void)
   MX_ADC3_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
-  /* DWT cycle counter: single time base for the injection durations and for
-   * measuring the time between TMG edges in the ISRs. Started first, so it is
-   * already counting when the EXTIs are enabled. */
-  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-  DWT->CYCCNT = 0U;
-  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  /* CubeMX currently emits COMP_HYSTERESIS_NONE. Apply the board-level value
+   * from a preserved user block before injection can start a comparator. */
+  injector_comparator_hysteresis_init();
+
+  const dcdc_platform_stm32_config_t dcdc_platform_config = {
+    .pwm_timer = &htim1,
+    .vbus_adc = &hadc1,
+    .adc_dma_values = ADC_VAL_adc1,
+    .adc_dma_value_count = 8U,
+    .vbus_dma_index = ADC1_IDX_VBUS,
+    .vref_dma_index = ADC1_IDX_VREF,
+    .fallback_vdda_mv = VDDA_MV,
+  };
+  if (!dcdc_platform_stm32_init(&dcdc_platform_config, HAL_GetTick()))
+  {
+    Error_Handler();
+  }
 
   HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn);
   HAL_NVIC_DisableIRQ(DMA1_Channel2_IRQn);
@@ -285,22 +279,22 @@ int main(void)
   HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 15, 0);
   HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 15, 0);
 
-  /* TMG_OUT EXTI interrupts at the highest priority. Enabled here and handled
-   * in stm32g4xx_it.c (USER CODE 1) because CubeMX does not manage them:
-   * do NOT tick the EXTI lines in the NVIC tab, it would duplicate the handlers. */
-  __HAL_GPIO_EXTI_CLEAR_IT(TMG_OUT9_Pin | TMG_OUT3_Pin | TMG_OUT1_Pin | TMG_OUT6_Pin |
-                           TMG_OUT2_Pin | TMG_OUT7_Pin | TMG_OUT4_Pin | TMG_OUT8_Pin);
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
-
   if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_SINGLE_ENDED) != HAL_OK)
   {
     Error_Handler();
   }
 
   if (HAL_ADCEx_Calibration_Start(&hadc3, ADC_SINGLE_ENDED) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  if (HAL_ADCEx_Calibration_Start(&hadc2, ADC_SINGLE_ENDED) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  if (!dcdc_platform_stm32_configure_analog_watchdog())
   {
     Error_Handler();
   }
@@ -317,14 +311,41 @@ int main(void)
   }
   __HAL_DMA_DISABLE_IT(&hdma_adc3, DMA_IT_HT | DMA_IT_TC);
 
-  if (HAL_FDCAN_Start(&hfdcan1) != HAL_OK)
+  if (HAL_ADC_Start(&hadc2) != HAL_OK)
   {
     Error_Handler();
   }
 
-  trigger_decoder_init();
-  spark_init();        /* coils off, spark state cleared */
-  injection_init();    /* threshold DACs started, injectors off */
+  if (!dcdc_platform_stm32_start())
+  {
+    Error_Handler();
+  }
+
+#if (BOARD_FDCAN1_TRANSCEIVER_WIRING_FIXED != 0U)
+  if ((diagnostics_can_init(&hfdcan1) != HAL_OK) ||
+      (HAL_FDCAN_Start(&hfdcan1) != HAL_OK))
+  {
+    Error_Handler();
+  }
+#endif
+
+  /* Initialize the consumer before enabling any trigger producer.  TIM2 is a
+   * common clock for captured/EXTI edges and actuator hard deadlines. */
+  const trigger_decoder_config_t *trigger_config =
+      trigger_decoder_default_config();
+  (void)engine_control_init(trigger_config, trigger_capture_timestamp_hz());
+  /* Start supervision before trigger IRQs. A noisy/stuck input must not be
+   * able to starve foreground activation of the watchdog. */
+  if (!engine_watchdog_stm32_start())
+  {
+    engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
+    Error_Handler();
+  }
+  if (!trigger_capture_stm32_init(trigger_config))
+  {
+    engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
+    Error_Handler();
+  }
 
   /* USER CODE END 2 */
 
@@ -332,43 +353,39 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    const uint32_t now_ms = HAL_GetTick();
+    engine_control_state_t engine;
+    engine_control_service();
+    engine_control_get_state(&engine);
 
-    /* Decode the trigger wheel and update crankshaft position + speed.
-     * The raw timestamps come from the EXTI ISRs (tmg_* arrays); the decoder
-     * is swappable by changing trigger_decoder.c for the pattern in use. */
-    trigger_input_t tin = {
-      .last_edge_cyc = tmg_last_edge_cyc,
-      .period_cyc    = tmg_period_cyc,
-      .edge_count    = tmg_edge_count,
-      .now_cyc       = cycle_now(),
-      .cpu_hz        = SystemCoreClock,
-    };
-    trigger_output_t tout;
-    trigger_decoder_update(&tin, &tout);
-    engine_angle = tout.crank_angle_deg;
-    engine_rpm   = tout.rpm;
-    for (uint32_t i = 0U; i < TMG_CH_COUNT; i++)
-      channel_angle[i] = tout.angle[i];
+    dcdc_platform_stm32_service(now_ms);
 
     adc_snapshot_t adc = adc_snapshot_read();
-    int32_t temp_celsius = __HAL_ADC_CALC_TEMPERATURE(VDDA_MV, adc.temp_raw, ADC_RESOLUTION_12B);
+    uint32_t vdda_mv = (adc.vref_raw != 0U) ?
+        __HAL_ADC_CALC_VREFANALOG_VOLTAGE(adc.vref_raw, ADC_RESOLUTION_12B) :
+        VDDA_MV;
 
-    /* Spark and injection modules (initialized by spark_init()/injection_init()
-     * above). Each loop, update the cylinders whose inputs changed and/or just
-     * re-run the dispatch. Channels come from the firing order in engine_config.h.
-     * spark_update(1, 20.0f, 3.0f);     // cyl 1: 20 deg advance, 3 ms dwell
-     * injection_update(1, 360.0f, 8.0f);// cyl 1: start 360 BTDC, 8 ms duration
-     * spark_update(0, 0, 0);            // no update: just re-run the dispatch
-     * spark_off(-1); injection_off(-1); // fault: shut off all (bitmask, -1=all)
-     */
+#if (BOARD_FDCAN1_TRANSCEIVER_WIRING_FIXED != 0U)
+    int32_t temp_celsius = __HAL_ADC_CALC_TEMPERATURE(
+        vdda_mv, adc.temp_raw, ADC_RESOLUTION_12B);
 
-    /* CAN telemetry: RT_Status every CAN_TX_PERIOD_MS milliseconds */
-    static uint32_t last_can_tx = 0U;
-    if ((HAL_GetTick() - last_can_tx) >= CAN_TX_PERIOD_MS)
-    {
-      last_can_tx = HAL_GetTick();
-      can_send_status(engine_angle, temp_celsius, adc.vbat_raw, adc.vbus_raw);
-    }
+    diagnostics_sensor_snapshot_t sensors = {
+      .mcu_temperature_c = temp_celsius,
+      .external_vbatt_raw = adc.vbat_raw,
+      .vbus_raw = adc.vbus_raw,
+      .vdda_mv = (uint16_t)vdda_mv,
+    };
+    diagnostics_can_service(now_ms, &engine, &sensors);
+#else
+    /* ADC values remain visible to a debugger while the unsafe CAN route is
+     * disabled. adc_snapshot_read() above also clears ADC2 EOC/overrun. */
+    (void)adc;
+    (void)vdda_mv;
+#endif
+
+    /* Refresh only after the complete foreground control/diagnostics pass.
+     * A deadlock or unbounded service therefore causes a hardware reset. */
+    engine_watchdog_stm32_refresh();
 
   }
     /* USER CODE END WHILE */
@@ -393,13 +410,12 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV4;
-  RCC_OscInitStruct.PLL.PLLN = 85;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
+  RCC_OscInitStruct.PLL.PLLN = 34;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
@@ -531,7 +547,7 @@ static void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_VBAT;
+  sConfig.Channel = ADC_CHANNEL_VREFINT;
   sConfig.Rank = ADC_REGULAR_RANK_7;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
@@ -566,7 +582,8 @@ static void MX_ADC2_Init(void)
   ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC2_Init 1 */
-
+  /* ADC_CHANNEL_12 is fed by the external VBATT divider. Keep the long
+   * CubeMX sampling time so the divider source impedance can settle. */
   /* USER CODE END ADC2_Init 1 */
 
   /** Common config
@@ -579,7 +596,7 @@ static void MX_ADC2_Init(void)
   hadc2.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc2.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   hadc2.Init.LowPowerAutoWait = DISABLE;
-  hadc2.Init.ContinuousConvMode = DISABLE;
+  hadc2.Init.ContinuousConvMode = ENABLE;
   hadc2.Init.NbrOfConversion = 1;
   hadc2.Init.DiscontinuousConvMode = DISABLE;
   hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
@@ -596,7 +613,7 @@ static void MX_ADC2_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_12;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_2CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
   sConfig.Offset = 0;
@@ -1087,6 +1104,14 @@ static void MX_FDCAN1_Init(void)
 {
 
   /* USER CODE BEGIN FDCAN1_Init 0 */
+#if (BOARD_FDCAN1_TRANSCEIVER_WIRING_FIXED == 0U)
+  /* Leave both contested logic-side CAN nets passive on the affected PCB.
+   * This early return is in a CubeMX user block so regeneration preserves the
+   * electrical safety gate even though the .ioc still describes FDCAN1. */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_11 | GPIO_PIN_12);
+  return;
+#endif
   /* USER CODE END FDCAN1_Init 0 */
 
   /* USER CODE BEGIN FDCAN1_Init 1 */
@@ -1138,11 +1163,11 @@ static void MX_TIM1_Init(void)
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;
   htim1.Init.Period = 65535;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim1.Init.RepetitionCounter = 1;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -1153,10 +1178,6 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1182,18 +1203,20 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  sConfigOC.OCMode = TIM_OCMODE_PWM2;
+  sConfigOC.Pulse = 65535;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_ENABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_ENABLE;
   sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
   sBreakDeadTimeConfig.DeadTime = 0;
   sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
@@ -1334,6 +1357,8 @@ static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* Trigger pins start as passive inputs. trigger_capture_stm32_init() later
+   * applies the enabled channels and edge polarity from the wheel list. */
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
@@ -1356,8 +1381,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOF, LED2_Pin|LED1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin
-                          |TMG_OUT5_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, IGN7_Pin|IGN10_Pin|IGN9_Pin, GPIO_PIN_RESET);
@@ -1390,10 +1414,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : BOOST910_Pin BOOST1112_Pin BOOST78_Pin BOOST56_Pin
-                           TMG_OUT5_Pin */
-  GPIO_InitStruct.Pin = BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin
-                          |TMG_OUT5_Pin;
+  /*Configure GPIO pins : BOOST910_Pin BOOST1112_Pin BOOST78_Pin BOOST56_Pin */
+  GPIO_InitStruct.Pin = BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -1417,21 +1439,21 @@ static void MX_GPIO_Init(void)
                            TMG_OUT4_Pin TMG_OUT8_Pin */
   GPIO_InitStruct.Pin = TMG_OUT1_Pin|TMG_OUT6_Pin|TMG_OUT2_Pin|TMG_OUT7_Pin
                           |TMG_OUT4_Pin|TMG_OUT8_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /*Configure GPIO pin : TMG_OUT3_Pin */
   GPIO_InitStruct.Pin = TMG_OUT3_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(TMG_OUT3_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : TMG_OUT9_Pin */
-  GPIO_InitStruct.Pin = TMG_OUT9_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  /*Configure GPIO pins : TMG_OUT9_Pin TMG_OUT5_Pin */
+  GPIO_InitStruct.Pin = TMG_OUT9_Pin|TMG_OUT5_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(TMG_OUT9_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
   /* USER CODE END MX_GPIO_Init_2 */
@@ -1439,72 +1461,13 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 int _write(int file, char *ptr, int len) {
+    (void)file;
     for (int i = 0; i < len; i++) {
         ITM_SendChar((*ptr++));
     }
     return len;
 }
 
-/**
- * @brief Send the RT_Status message (ID 0x100, 8 bytes, classic CAN).
- *
- * Little-endian layout, aligned with RT_STACK_V2.dbc:
- *  byte 0-1: EngineAngle, 0.1 deg/bit
- *  byte 2  : McuTemp, signed degrees C
- *  byte 3  : reserved
- *  byte 4-5: Vbat, raw ADC counts
- *  byte 6-7: Vbus, raw ADC counts
- */
-HAL_StatusTypeDef can_send_status(float angle_deg, int32_t temp_c,
-                                  uint16_t vbat_raw, uint16_t vbus_raw)
-{
-  FDCAN_TxHeaderTypeDef tx = {0};
-  uint8_t data[8];
-
-  tx.Identifier = CAN_ID_RT_STATUS;
-  tx.IdType = FDCAN_STANDARD_ID;
-  tx.TxFrameType = FDCAN_DATA_FRAME;
-  tx.DataLength = FDCAN_DLC_BYTES_8;
-  tx.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-  tx.BitRateSwitch = FDCAN_BRS_OFF;   /* no bit rate switch: classic frame */
-  tx.FDFormat = FDCAN_CLASSIC_CAN;    /* readable by CAN-only receivers */
-  tx.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-  tx.MessageMarker = 0;
-
-  uint16_t angle_raw = (uint16_t)(angle_deg * 10.0f);
-  data[0] = (uint8_t)(angle_raw & 0xFFU);
-  data[1] = (uint8_t)(angle_raw >> 8);
-  data[2] = (uint8_t)(int8_t)temp_c;
-  data[3] = 0U;
-  data[4] = (uint8_t)(vbat_raw & 0xFFU);
-  data[5] = (uint8_t)(vbat_raw >> 8);
-  data[6] = (uint8_t)(vbus_raw & 0xFFU);
-  data[7] = (uint8_t)(vbus_raw >> 8);
-
-  return HAL_FDCAN_AddMessageToTxFifoQ(&hfdcan1, &tx, data);
-}
-
-/**
- * @brief TMG rising-edge ISR: timestamp every edge with the cycle counter.
- *
- * Reads cycle_now() first (minimum latency), then maps the pin to the TMG
- * channel number and updates timestamp, period and count. The period is the
- * time (in cycles) elapsed since the previous edge of the same channel and is
- * valid once tmg_edge_count[ch] >= 2 (the first edge has no reference). The
- * angle/RPM decode logic is built on these variables.
- */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  uint32_t now = cycle_now();
-  uint8_t  ch = tmg_channel_from_pin(GPIO_Pin);
-  if (ch == 0U)
-    return;
-
-  /* Unsigned subtraction: correct even across the counter's 2^32 wrap */
-  tmg_period_cyc[ch]    = now - tmg_last_edge_cyc[ch];
-  tmg_last_edge_cyc[ch] = now;
-  tmg_edge_count[ch]++;
-}
 /* USER CODE END 4 */
 
 /**
@@ -1517,6 +1480,7 @@ void Error_Handler(void)
   /* Trap: do not continue with clock/peripherals in an undefined state.
    * Note: this can be called before MX_GPIO_Init (e.g. SystemClock_Config
    * failure), so do not drive GPIO/LED here. */
+  engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
   __disable_irq();
   while (1)
   {

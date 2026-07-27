@@ -62,6 +62,11 @@ Reset_Handler:
   ldr   r0, =_estack
   mov   sp, r0          /* set stack pointer */
 
+/* Drive every actuator-control net low before SystemInit, .data copy, BSS
+ * clearing, or libc initialization. This register-only routine deliberately
+ * has no dependency on initialized RAM. main() calls it again defensively. */
+    bl  board_force_actuator_pins_low_early
+
 /* Call the clock system initialization function.*/
     bl  SystemInit
 
@@ -589,4 +594,3 @@ g_pfnVectors:
 
 	.weak	FMAC_IRQHandler
 	.thumb_set FMAC_IRQHandler,Default_Handler
-

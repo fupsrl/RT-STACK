@@ -22,6 +22,9 @@
 #include "stm32g4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "dcdc_platform_stm32.h"
+#include "engine_control.h"
+#include "trigger_capture_stm32.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -70,7 +73,10 @@ extern DMA_HandleTypeDef hdma_adc3;
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
+  engine_control_emergency_fault_isr(ENGINE_FAULT_CLOCK);
+  /* CSS is the board's NMI source. Reset after forcing all power outputs off;
+   * boot will either recover the 20 MHz HSE or fail safely in Error_Handler. */
+  NVIC_SystemReset();
   /* USER CODE END NonMaskableInt_IRQn 0 */
   /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
    while (1)
@@ -85,7 +91,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -100,7 +106,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -115,7 +121,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -130,7 +136,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  engine_control_emergency_fault_isr(ENGINE_FAULT_PLATFORM);
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -188,6 +194,9 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
+  /* Off-only deadline supervision: a stalled foreground loop cannot leave
+   * TIM1 repeating the last boost duty until the one-second IWDG reset. */
+  dcdc_platform_stm32_systick_isr(HAL_GetTick());
   /* Heartbeat: LED1 blinks at 1 Hz while the system is alive */
   static uint16_t led_div = 0U;
   if (++led_div >= 500U)
@@ -234,6 +243,14 @@ void DMA1_Channel2_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+/**
+  * @brief TIM2 compare deadline and TMG5 input-capture interrupt.
+  */
+void TIM2_IRQHandler(void)
+{
+  trigger_capture_stm32_timer_irq();
+}
+
 /**
   * @brief This function handles EXTI line[9:5] interrupts (TMG_OUT9, TMG_OUT3).
   */

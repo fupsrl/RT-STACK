@@ -1,0 +1,2 @@
+../Core/Src/engine_watchdog_stm32.c:21:6:engine_watchdog_stm32_start	4
+../Core/Src/engine_watchdog_stm32.c:48:6:engine_watchdog_stm32_refresh	1

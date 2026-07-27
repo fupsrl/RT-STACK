@@ -1,0 +1,2 @@
+../Core/Src/board_safety_stm32.c:6:13:preload_low_output	3
+../Core/Src/board_safety_stm32.c:31:6:board_force_actuator_pins_low_early	1

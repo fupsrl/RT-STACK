@@ -1,0 +1,2 @@
+../Core/Src/engine_watchdog_stm32.c:21:6:engine_watchdog_stm32_start	16	static,ignoring_inline_asm
+../Core/Src/engine_watchdog_stm32.c:48:6:engine_watchdog_stm32_refresh	4	static

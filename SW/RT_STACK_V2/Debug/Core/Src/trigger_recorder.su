@@ -1,0 +1,5 @@
+../Core/Src/trigger_recorder.c:13:6:trigger_recorder_init	16	static
+../Core/Src/trigger_recorder.c:21:6:trigger_recorder_record_isr	48	static,ignoring_inline_asm
+../Core/Src/trigger_recorder.c:56:6:trigger_recorder_pop_oldest	56	static,ignoring_inline_asm
+../Core/Src/trigger_recorder.c:103:10:trigger_recorder_dropped	16	static
+../Core/Src/trigger_recorder.c:116:10:trigger_recorder_pending	32	static,ignoring_inline_asm
