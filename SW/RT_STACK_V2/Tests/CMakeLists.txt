@@ -93,3 +93,15 @@ if(NOT MSVC)
 endif()
 rt_stack_strict_warnings(engine_control_integration_tests)
 add_test(NAME engine_control_integration COMMAND engine_control_integration_tests)
+
+add_executable(dcdc_tests
+  dcdc/test_dcdc.c
+  ../Core/Src/dcdc_control.c
+  ../Core/Src/dcdc_pwm.c
+)
+target_include_directories(dcdc_tests PRIVATE ../Core/Inc)
+if(NOT MSVC)
+  target_link_libraries(dcdc_tests PRIVATE m)
+endif()
+rt_stack_strict_warnings(dcdc_tests)
+add_test(NAME dcdc COMMAND dcdc_tests)

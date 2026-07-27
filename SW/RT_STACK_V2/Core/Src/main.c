@@ -10,6 +10,7 @@
 #include "board_config.h"
 #include "board_safety_stm32.h"
 #include "diagnostics_can.h"
+#include "dcdc_platform_stm32.h"
 #include "engine_control.h"
 #include "engine_watchdog_stm32.h"
 #include "trigger_capture_stm32.h"
@@ -229,9 +230,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  /* The current clock source is HSI16.  Do not enable HSE clock security until
-   * the fitted crystal frequency has been confirmed and SystemClock_Config
-   * has intentionally been migrated to HSE. */
+  HAL_RCC_EnableCSS();
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -260,6 +259,20 @@ int main(void)
    * from a preserved user block before injection can start a comparator. */
   injector_comparator_hysteresis_init();
 
+  const dcdc_platform_stm32_config_t dcdc_platform_config = {
+    .pwm_timer = &htim1,
+    .vbus_adc = &hadc1,
+    .adc_dma_values = ADC_VAL_adc1,
+    .adc_dma_value_count = 8U,
+    .vbus_dma_index = ADC1_IDX_VBUS,
+    .vref_dma_index = ADC1_IDX_VREF,
+    .fallback_vdda_mv = VDDA_MV,
+  };
+  if (!dcdc_platform_stm32_init(&dcdc_platform_config, HAL_GetTick()))
+  {
+    Error_Handler();
+  }
+
   HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn);
   HAL_NVIC_DisableIRQ(DMA1_Channel2_IRQn);
   /* ADC DMA priority at the minimum (the IRQs stay disabled anyway) */
@@ -281,6 +294,11 @@ int main(void)
     Error_Handler();
   }
 
+  if (!dcdc_platform_stm32_configure_analog_watchdog())
+  {
+    Error_Handler();
+  }
+
   if (HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_VAL_adc1, 8U) != HAL_OK)
   {
     Error_Handler();
@@ -294,6 +312,11 @@ int main(void)
   __HAL_DMA_DISABLE_IT(&hdma_adc3, DMA_IT_HT | DMA_IT_TC);
 
   if (HAL_ADC_Start(&hadc2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  if (!dcdc_platform_stm32_start())
   {
     Error_Handler();
   }
@@ -330,16 +353,19 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
+    const uint32_t now_ms = HAL_GetTick();
     engine_control_state_t engine;
     engine_control_service();
     engine_control_get_state(&engine);
 
-#if (BOARD_FDCAN1_TRANSCEIVER_WIRING_FIXED != 0U)
+    dcdc_platform_stm32_service(now_ms);
+
     adc_snapshot_t adc = adc_snapshot_read();
     uint32_t vdda_mv = (adc.vref_raw != 0U) ?
         __HAL_ADC_CALC_VREFANALOG_VOLTAGE(adc.vref_raw, ADC_RESOLUTION_12B) :
         VDDA_MV;
+
+#if (BOARD_FDCAN1_TRANSCEIVER_WIRING_FIXED != 0U)
     int32_t temp_celsius = __HAL_ADC_CALC_TEMPERATURE(
         vdda_mv, adc.temp_raw, ADC_RESOLUTION_12B);
 
@@ -349,11 +375,12 @@ int main(void)
       .vbus_raw = adc.vbus_raw,
       .vdda_mv = (uint16_t)vdda_mv,
     };
-    diagnostics_can_service(HAL_GetTick(), &engine, &sensors);
+    diagnostics_can_service(now_ms, &engine, &sensors);
 #else
-    /* Clear ADC2 EOC/overrun and keep its latest sample available to a
-     * debugger even while the unsafe CAN route is disabled. */
-    (void)adc_snapshot_read();
+    /* ADC values remain visible to a debugger while the unsafe CAN route is
+     * disabled. adc_snapshot_read() above also clears ADC2 EOC/overrun. */
+    (void)adc;
+    (void)vdda_mv;
 #endif
 
     /* Refresh only after the complete foreground control/diagnostics pass.
@@ -383,13 +410,12 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
-  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV4;
-  RCC_OscInitStruct.PLL.PLLN = 85;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV2;
+  RCC_OscInitStruct.PLL.PLLN = 34;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
   RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
@@ -556,7 +582,8 @@ static void MX_ADC2_Init(void)
   ADC_ChannelConfTypeDef sConfig = {0};
 
   /* USER CODE BEGIN ADC2_Init 1 */
-
+  /* ADC_CHANNEL_12 is fed by the external VBATT divider. Keep the long
+   * CubeMX sampling time so the divider source impedance can settle. */
   /* USER CODE END ADC2_Init 1 */
 
   /** Common config
@@ -586,7 +613,6 @@ static void MX_ADC2_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_12;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  /* External VBATT divider: allow its source impedance to settle. */
   sConfig.SamplingTime = ADC_SAMPLETIME_247CYCLES_5;
   sConfig.SingleDiff = ADC_SINGLE_ENDED;
   sConfig.OffsetNumber = ADC_OFFSET_NONE;
@@ -1137,11 +1163,11 @@ static void MX_TIM1_Init(void)
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED3;
   htim1.Init.Period = 65535;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim1.Init.RepetitionCounter = 1;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
@@ -1152,10 +1178,6 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_OC_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1181,18 +1203,20 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
-  sConfigOC.OCMode = TIM_OCMODE_TIMING;
-  if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  sConfigOC.OCMode = TIM_OCMODE_PWM2;
+  sConfigOC.Pulse = 65535;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
   if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
   }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_ENABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_ENABLE;
   sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
   sBreakDeadTimeConfig.DeadTime = 0;
   sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
@@ -1333,6 +1357,8 @@ static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
+  /* Trigger pins start as passive inputs. trigger_capture_stm32_init() later
+   * applies the enabled channels and edge polarity from the wheel list. */
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
@@ -1355,8 +1381,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOF, LED2_Pin|LED1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin,
-                    GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, BOOST910_Pin|BOOST1112_Pin|BOOST78_Pin|BOOST56_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, IGN7_Pin|IGN10_Pin|IGN9_Pin, GPIO_PIN_RESET);
@@ -1410,8 +1435,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* Trigger pins start as passive inputs.  trigger_capture_stm32_init() later
-   * applies the enabled channels and edge polarity from the wheel list. */
+  /*Configure GPIO pins : TMG_OUT1_Pin TMG_OUT6_Pin TMG_OUT2_Pin TMG_OUT7_Pin
+                           TMG_OUT4_Pin TMG_OUT8_Pin */
   GPIO_InitStruct.Pin = TMG_OUT1_Pin|TMG_OUT6_Pin|TMG_OUT2_Pin|TMG_OUT7_Pin
                           |TMG_OUT4_Pin|TMG_OUT8_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;

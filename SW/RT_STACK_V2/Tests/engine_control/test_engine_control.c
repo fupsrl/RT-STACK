@@ -144,6 +144,12 @@ void spark_emergency_off(void)
   ++fake.spark_emergency_calls;
 }
 
+/* The converter behavior is covered by Tests/dcdc. This fake satisfies the
+ * shared engine emergency-shutdown seam used by the integration test. */
+void dcdc_control_emergency_off(void)
+{
+}
+
 bool spark_rearm_after_emergency(void)
 {
   ++fake.spark_rearm_calls;
